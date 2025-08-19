@@ -16,3 +16,5 @@ The difference in the wire causes a difference
 at the end, some nonlinearity effects
 
 maybe do the square again
+
+I think we are limited by the unprecision of the frequency => longer intervals

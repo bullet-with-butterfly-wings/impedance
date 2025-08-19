@@ -5,10 +5,13 @@ from pathlib import Path
 import json
 from scipy.signal import butter, filtfilt
 from pandas import read_csv
+from numpy.fft import fft, ifft
 
-
-frequencies = [200e3, 400e3, 500e3, 600e3, 700e3, 800e3, 900e3, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6, 1.6e6, 1.8e6, 2e6]
+frequencies = np.array([200e3, 400e3, 500e3, 600e3, 700e3, 800e3, 900e3, 1e6, 1.1e6, 1.2e6, 1.3e6, 1.4e6, 1.5e6, 1.6e6, 1.8e6, 2e6])
+low_frequencies = np.array([0, 10, 100, 1e3, 10e3, 30e3, 100e3])
 square_factor = np.pi/np.log(2)
+
+frequencies = low_frequencies
 
 def rectangle_factor(a, b):
     return np.pi/(8 * sum([1/((2*i-1)*np.sinh((2*i-1)*np.pi*b/a)) for i in range(1, 20)]))
@@ -27,48 +30,58 @@ def get_amplitudes(file, freq, plot=False): #return amplitudes and phases of inp
     channels = data[1:]
     waves_param = [] #[(amplitude, phase), ...]
     for i, ch in enumerate(channels):
-        try:
-             # Normalize cutoff frequency
+        if freq != 0:
+            print(freq)
+            # Normalize cutoff frequency
             fs = 100 / (times[100] - times[0])  # Sampling frequency
-            cutoff = 10e6  # Cutoff frequency for low-pass filter
-            nyquist = 0.5 * fs
-            normal_cutoff = cutoff / nyquist
-            
-            # Create Butterworth filter coefficients
-            b, a = butter(4, normal_cutoff, btype='low', analog=False)
-            
-            # Apply the filter with zero-phase distortion
-            filtered_signal = filtfilt(b, a, ch)
+            try:
+                cutoff = 5e6  # Cutoff frequency for low-pass filter
+                nyquist = 0.5 * fs
+                normal_cutoff = cutoff / nyquist
+                # Create Butterworth filter coefficients
+                b, a = butter(4, normal_cutoff, btype='low', analog=False)
+                
+                # Apply the filter with zero-phase distortion
+                filtered_signal = filtfilt(b, a, ch)
+            except Exception as e:
+                print(f"Error applying filter: {e}")
+                print(f"Signal unfiltered for frequency {freq} channel {i+1}")
+                filtered_signal = ch
+
             fit = curve_fit(trigo, times, filtered_signal, p0=(0.2, freq, 0, 0), bounds=([0, 0, -np.pi, -np.inf], [np.inf, np.inf, np.pi, np.inf]))[0]
             waves_param.append((abs(fit[0]), fit[2]))  # (amplitude, phase)
-        except:
-            plt.plot(times, filtered_signal)
+        else:
+            waves_param.append((np.mean(ch), 0))
+        if plot:
+            plt.plot(times, ch)
             plt.title(f"Check - ch{i}")
             plt.xlabel("Time [s]")
             plt.ylabel("Voltage [V]")
             plt.show()
-            
-        if plot:
-            plt.plot(times, filtered_signal, label=f"Channel {i+1}")
-            plt.plot(times, trigo(times, *fit))
-            plt.title(f"Check - ch{i}")
-            plt.xlabel("Time [s]")
-            plt.ylabel("Voltage [V]")
+            X = fft(filtered_signal)
+            Y = fft(ch)
+            N = len(X)
+            n = np.arange(N)
+            T = N/fs
+            plt.xlim(0, 10e6)
+            plt.stem(n/T, np.abs(X), label="Filtered", markerfmt='red')
+            plt.stem(n/T, np.abs(Y), label = "Original", markerfmt='blue')
             plt.legend()
             plt.show()
+
 
     return waves_param
 
 
 
-def analyze_data_series(folder, file_name, factor = 1):
+def trap_measurement(folder, file_name, factor = 1):
     Z_measurements = []
     phases = []
     folder_path = Path(folder)
     csv_files = sorted([f.name for f in folder_path.glob("*.csv")], key=lambda x: int(x.split('.')[0][len(file_name):]))[:len(frequencies)]  # Sort by file name
     #load gains
-    gain1_folder = "supernew1"
-    gain180_folder = "supernew180"
+    gain1_folder = "low_frequency1" #"supernew1"
+    gain180_folder = "low_frequency180" #"supernew180"
     with open("gains.json", 'r') as f:
         data = json.load(f)
         gains180 = data[gain180_folder]["gain"]
@@ -153,19 +166,17 @@ def compute_noise(resistivities):
     return S, heating_rate
 
 
-
-
-g1_graphs = [("gain1", "Take 1"), ("lowg", "Take 2"), ("new1", "Take 3"), ("supernew1", "Take 4"), ("supernew1again", "Take 5")]
-g180_graphs = [("gain180", "Take 1"), ("newg180", "Take 2"), ("supernew180", "Take 3")]
+g1_graphs = [("supernew1", "Take 4")]#[("gain1", "Take 1"), ("lowg", "Take 2"), ("new1", "Take 3"), ("supernew1", "Take 4"), ("supernew1again", "Take 5")]
+g180_graphs = [("supernew180", "Take 3")] #[("gain180", "Take 1"), ("newg180", "Take 2"), ("supernew180", "Take 3")]
 
 #gain_measurements("supernew1again", "g", save=True, plot=True)
 def gain_plot(g1_graphs, g180_graphs):
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
 
     for folder, label in g1_graphs:
         g1, phase1 = gain_measurements(folder, "g", save=False, plot=False)
-        axes[0, 0].plot(frequencies, g1, marker='o', label=label)
-        axes[1, 0].plot(frequencies, phase1, marker='o', label=label)
+        axes[0, 0].plot(frequencies, g1, marker='o', color = "orange", label=label)
+        axes[1, 0].plot(frequencies, phase1, marker='o', color = "orange", label=label)
 
     for folder, label in g180_graphs:
         g180, phase180 = gain_measurements(folder, "g", save=False, plot=False)
@@ -202,7 +213,7 @@ def plot_traps(graphs):
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     for folder, file, tag, factor in graphs:
-        Z_measurements, phases = analyze_data_series(folder, file, factor=factor)
+        Z_measurements, phases = trap_measurement(folder, file, factor=factor)
         # Real part
         axes[0].plot(frequencies[:len(Z_measurements)],
                     Z_measurements * np.cos(phases),
@@ -222,9 +233,9 @@ def plot_traps(graphs):
     # Formatting
     axes[0].set_xlabel("Frequency [Hz]")
     axes[0].set_ylabel("Re[Z] [Ohm]")
-    #axes[0].set_ylim(0, 50e-3)
     axes[0].set_title("Impedance vs Frequency (Real part)")
     axes[0].grid(True)
+    axes[0].set_ylim(bottom=0)
     axes[0].legend()
 
     axes[1].set_xlabel("Frequency [Hz]")
@@ -295,11 +306,12 @@ def open_circuit(folder, file_name):
     plt.tight_layout()
     plt.show()
 
-graphs = [("Traps/constant", "t", "Trap Constant", 3.0),
+graphs = [("Traps/constant", "t", "Trap mid-Annealed", 3.5),
           ("Traps/annealed", "t", "Trap Unannealed", simulations_factor),
           ("Traps/unannealed", "c", "Trap Annealed", simulations_factor),
-          ("Calibration/wirebond150m", "w", "Wirebond 150m", 1), 
-          ("Calibration/square", "r", "Square", square_factor)]
+          #("Calibration/wirebond150m", "w", "Wirebond 150m", 1),
+          ("Calibration/20m", "r", "Resistor 20m", 1)]
 
+graphs = [("Calibration/low20m", "r", "Resistor 20m", 1)]
 
 plot_traps(graphs)
